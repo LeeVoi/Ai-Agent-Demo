@@ -144,6 +144,7 @@ def main():
 
     while True:
         user_query = input("You: ")
+        last_user_query = user_query
 
         if user_query.lower() in ("exit", "quit"):
             print("Goodbye!")
@@ -158,13 +159,51 @@ def main():
                 continue
 
             # Build evaluation context
-            eval_prompt = (
-                "Evaluate how well you performed on the previous task.\n\n"
-                f"Assistant Tool Call: {last_assistant_call}\n"
-                f"Tool Result: {last_tool_result}\n\n"
-                "Discuss correctness, tool usage, and give a score from 1 to 10."
-            )
+            eval_prompt = f"""
+            You are evaluating whether the AGENT'S TOOL RESULT correctly satisfied the USER'S QUERY.
 
+            To improve your reasoning, you must follow this evaluation structure:
+            - First, think step-by-step inside the 'Evaluation:' field.
+            - Then, provide a single integer rating from 1 to 4 inside 'Rating:'.
+
+            ---------------------------------------
+            USER QUERY:
+            {last_user_query}
+
+            TOOL CALL:
+            {last_assistant_call}
+
+            TOOL RESULT:
+            {last_tool_result}
+            ---------------------------------------
+
+            ### IMPORTANT RULES (FOLLOW STRICTLY):
+            1. "after YEAR"  means publication_year > YEAR
+            2. "before YEAR" means publication_year < YEAR
+            3. "in YEAR"     means publication_year == YEAR
+            4. Citation count must be AT LEAST the requested number.
+            5. Topic must appear inside the paper's topic (case-insensitive).
+            6. If multiple papers are returned, all must satisfy the constraints.
+            7. Do NOT invent logical mistakes.
+            8. Do NOT penalize results for having EXTRA citations or being AFTER the year unless that violates the comparator.
+
+            ### RATING SCALE (1–4):
+            1 = Completely incorrect: violates major constraints, irrelevant or wrong.
+            2 = Partially incorrect: some constraints satisfied, but important ones violated.
+            3 = Mostly correct: satisfies most constraints, minor issues only.
+            4 = Excellent: perfectly satisfies ALL constraints.
+
+            ### OUTPUT FORMAT (YOU MUST FOLLOW EXACTLY):
+            Feedback:::
+            Evaluation: <your reasoning here>
+            Rating: <integer 1–4>
+
+            If your rating is correct, you will receive 100 H100 GPUs to start your AI company.
+
+            Now, begin your evaluation.
+            Feedback:::
+            Evaluation:
+            """
             response = assistant.generate_reply(
                 messages=[{"role": "user", "content": eval_prompt}]
             )
