@@ -3,13 +3,16 @@ import re
 from dotenv import load_dotenv
 from autogen import AssistantAgent, UserProxyAgent
 
-# Load API key
+# Load environment variables (used for loading the Mistral API key)
 load_dotenv()
 API_KEY = os.getenv("MISTRAL_API_KEY")
 
 # -----------------------------------------------------------
 # LLM CONFIGURATION
 # -----------------------------------------------------------
+# This configuration comes directly from the assignment requirements.
+# It defines which cloud LLM to use, how to authenticate, and how
+# Autogen should handle request rate limits and tool call behavior.
 LLM_CONFIG = {
     "config_list": [
         {
@@ -30,6 +33,8 @@ LLM_CONFIG = {
 # -----------------------------------------------------------
 # FAKE RESEARCH PAPER DATABASE
 # -----------------------------------------------------------
+# Instead of using a live API, we implement a mock dataset.
+# The agent will query this "database" using its tool.
 PAPERS = [
     {"title": "Adaptive Meta-Learning Networks", "topic": "AI", "year": 2020, "citations": 340},
     {"title": "Efficient Reinforcement Agents with Sparse Rewards", "topic": "AI", "year": 2017, "citations": 780},
@@ -53,22 +58,30 @@ PAPERS = [
 ]
 
 def search_papers(topic: str, comparator: str, year: int, citations: int):
-    """Search the fake research paper database."""
+    """
+    Search the fake paper database using simple filtering logic.
+
+    - Topic must match (case-insensitive substring)
+    - Year comparison uses "before", "after", or "in"
+    - Citations must meet the minimum threshold
+    """
     results = []
     for p in PAPERS:
 
+        # Topic filtering
         if topic.lower() not in p["topic"].lower():
             continue
 
+        # Compare the publication year using the comparator
         valid_year = (
             (comparator == "before" and p["year"] < year) or
             (comparator == "after" and p["year"] > year) or
             (comparator == "in" and p["year"] == year)
         )
-
         if not valid_year:
             continue
 
+        # Citation count filtering
         if p["citations"] >= citations:
             results.append(p)
 
@@ -78,6 +91,8 @@ def search_papers(topic: str, comparator: str, year: int, citations: int):
 # -----------------------------------------------------------
 # TOOL FUNCTION
 # -----------------------------------------------------------
+# This is the tool the model will call.
+# Autogen enforces that the Assistant must call this function.
 def paper_search_tool(topic: str, comparator: str, year: int, citations: int):
     """Wrapper for the research paper search function."""
     return search_papers(topic, comparator, year, citations)
@@ -86,6 +101,7 @@ def paper_search_tool(topic: str, comparator: str, year: int, citations: int):
 # -----------------------------------------------------------
 # ASSISTANT AGENT SETUP
 # -----------------------------------------------------------
+# The system message forces the LLM to respond ONLY with the tool call.
 assistant = AssistantAgent(
     "assistant",
     llm_config=LLM_CONFIG,
@@ -98,6 +114,7 @@ assistant = AssistantAgent(
     ),
 )
 
+# Registering the tool
 assistant.register_function({
     "paper_search_tool": paper_search_tool
 })
@@ -106,20 +123,26 @@ assistant.register_function({
 # -----------------------------------------------------------
 # TOOL CALL INTERPRETER
 # -----------------------------------------------------------
+# Autogen (in this fork) outputs tool calls as plaintext.
+# This function extracts the tool arguments and executes it.
 def try_execute_tool(model_output: str):
     """Detect and execute paper_search_tool(...) from model output."""
 
+    # Match the function call text using regex
     match = re.search(r"paper_search_tool\((.*?)\)", model_output)
     if not match:
         return None
 
     arg_string = match.group(1)
+
+    # Extract key=value pairs from the argument list
     args = dict(re.findall(r"(\w+)\s*=\s*'?(.*?)'?(?=,|\)|$)", arg_string))
 
+    # Extract string fields
     topic = args.get("topic", "").strip("'\"")
     comparator = args.get("comparator", "in").strip("'\"")
 
-    # Safe integer conversions
+    # Convert numeric fields safely
     try:
         year = int(args.get("year", 0))
     except ValueError:
@@ -130,12 +153,15 @@ def try_execute_tool(model_output: str):
     except ValueError:
         citations = 0
 
+    # Call the tool
     return paper_search_tool(topic, comparator, year, citations)
 
 
 # -----------------------------------------------------------
 # INTERACTIVE LOOP
 # -----------------------------------------------------------
+# Provides a command-line interface to ask questions,
+# trigger evaluation, and exit the program.
 def main():
     print("Research Paper Agent (type 'exit' to quit)\n")
 
@@ -143,9 +169,11 @@ def main():
     last_tool_result = None
 
     while True:
+        # Get user input
         user_query = input("You: ")
         last_user_query = user_query
 
+        # Exit the program
         if user_query.lower() in ("exit", "quit"):
             print("Goodbye!")
             break
@@ -153,12 +181,13 @@ def main():
         # ---------------------------------------------------------
         # EVALUATION REQUEST
         # ---------------------------------------------------------
+        # If the user types "evaluate", the LLM acts as a judge
         if user_query.lower().startswith("evaluate"):
             if last_assistant_call is None:
                 print("\nNo previous task to evaluate.\n")
                 continue
 
-            # Build evaluation context
+            # A structured evaluation prompt using best practices
             eval_prompt = f"""
             You are evaluating whether the AGENT'S TOOL RESULT correctly satisfied the USER'S QUERY.
 
@@ -204,6 +233,8 @@ def main():
             Feedback:::
             Evaluation:
             """
+
+            # Ask the model for the evaluation
             response = assistant.generate_reply(
                 messages=[{"role": "user", "content": eval_prompt}]
             )
@@ -211,9 +242,11 @@ def main():
             print("\nEvaluation:\n", response.get("content", ""))
             print()
             continue
-        # ---------------------------------------------------------
 
-        # Normal query to the assistant
+        # ---------------------------------------------------------
+        # NORMAL USER QUERY (TOOL CALL GENERATION)
+        # ---------------------------------------------------------
+        # The assistant converts the query → tool call
         response = assistant.generate_reply(
             messages=[{"role": "user", "content": user_query}]
         )
@@ -221,7 +254,7 @@ def main():
         assistant_text = response.get("content", "")
         print("\nAssistant:", assistant_text)
 
-        # Run tool
+        # Execute the tool call if one was produced
         tool_result = try_execute_tool(assistant_text)
 
         if tool_result is not None:
@@ -230,12 +263,11 @@ def main():
             else:
                 print("Tool executed: No papers matched your query.")
 
-        # Save for evaluation
+        # Save values for possible evaluation
         last_assistant_call = assistant_text
         last_tool_result = tool_result
 
-        print()
-
+        print()  # Formatting spacer
 
 
 if __name__ == "__main__":
